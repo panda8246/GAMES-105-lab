@@ -18,6 +18,38 @@ def load_motion_data(bvh_file_path):
     return motion_data
 
 
+def load_joint_data(bvh_file_path):
+    joint_name = []
+    joint_parent = []
+    joint_offset = []
+    with open(bvh_file_path, 'r') as f:
+        lines = f.readlines()
+        stack = []
+        # 忽略第一行的 HIERACRCHY
+        for i in range(1, len(lines)):
+            # 读取完毕，退出
+            line = lines[i].strip()
+            if line.startswith('MOTION'):
+                break
+            if line.startswith('ROOT') or line.startswith('JOINT'):
+                joint_name.append(line[5:].strip())
+                if not stack:
+                    joint_parent.append(-1)
+                else:
+                    joint_parent.append(stack[-1])
+            elif line.startswith('End Site'):
+                parent_name = joint_name[stack[-1]]
+                joint_name.append(parent_name + "_end")
+                joint_parent.append(stack[-1])
+            elif line.startswith('OFFSET'):
+                pos = [float(x) for x in line[6:].split()]
+                joint_offset.append(pos)
+            elif line.startswith('{'):
+                stack.append(len(joint_name) - 1)
+            elif line.startswith('}'):
+                stack.pop()
+    return joint_name, joint_parent, joint_offset  
+
 
 def part1_calculate_T_pose(bvh_file_path):
     """请填写以下内容
@@ -30,10 +62,7 @@ def part1_calculate_T_pose(bvh_file_path):
     Tips:
         joint_name顺序应该和bvh一致
     """
-    joint_name = None
-    joint_parent = None
-    joint_offset = None
-    return joint_name, joint_parent, joint_offset
+    return load_joint_data(bvh_file_path)
 
 
 def part2_forward_kinematics(joint_name, joint_parent, joint_offset, motion_data, frame_id):
@@ -65,3 +94,8 @@ def part3_retarget_func(T_pose_bvh_path, A_pose_bvh_path):
     """
     motion_data = None
     return motion_data
+
+# test
+
+# import os.path as osp
+# part1_calculate_T_pose(osp.abspath(osp.dirname(__file__)) + "/data/walk60.bvh")
