@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
+
 def load_motion_data(bvh_file_path):
     """part2 辅助函数，读取bvh文件"""
     with open(bvh_file_path, 'r') as f:
@@ -13,7 +14,7 @@ def load_motion_data(bvh_file_path):
             data = [float(x) for x in line.split()]
             if len(data) == 0:
                 break
-            motion_data.append(np.array(data).reshape(1,-1))
+            motion_data.append(np.array(data).reshape(1, -1))
         motion_data = np.concatenate(motion_data, axis=0)
     return motion_data
 
@@ -123,12 +124,94 @@ def part3_retarget_func(T_pose_bvh_path, A_pose_bvh_path):
         两个bvh的joint name顺序可能不一致哦(
         as_euler时也需要大写的XYZ
     """
-    motion_data = None
+    T_names, T_parents, T_offsets = load_joint_data(T_pose_bvh_path)
+    A_names, A_parents, A_offsets = load_joint_data(A_pose_bvh_path)
+    # 过滤_end
+    T_names = [name for name in T_names if not name.endswith("_end")]
+    A_names = [name for name in A_names if not name.endswith("_end")]
+    A_motion = load_motion_data(A_pose_bvh_path)
+    # 获取起始帧的TPose和APose
+    A_start_frame = A_motion[0]
+    new_motion = A_motion.copy()
+    for a_i, a_name in enumerate(A_names):
+        if a_name not in ["lShoulder", "rShoulder"]:
+            continue
+        t_i = T_names.index(a_name)
+        a_ori = R.from_euler('XYZ', A_start_frame[(a_i + 1)*3:(a_i + 2)*3], degrees=True)
+        # 求得 A->T 的变换
+        a2t_trans = a_ori.inv()
+        t2a_trans = a2t_trans.inv()
+        for frame_id, frame_data in enumerate(A_motion):
+            start_iex = (a_i + 1) * 3
+            old_data = R.from_euler('XYZ', frame_data[start_iex:start_iex+3], degrees=True)
+            new_motion[frame_id][start_iex:start_iex+3] = (a2t_trans * old_data).as_euler('XYZ', degrees=True)
+    return new_motion
+
+def part3_retarget_func22(T_pose_bvh_path, A_pose_bvh_path):
+    def index_bone_to_channel(index, flag):
+        if flag == 't':
+            end_bone_index = end_bone_index_t
+        else:
+            end_bone_index = end_bone_index_a
+        for i in range(len(end_bone_index)):
+            if end_bone_index[i] > index:
+                return index - i
+        return index - len(end_bone_index)
+    
+    def get_t2a_offset(bone_name):
+        l_bone = ['lShoulder', 'lElbow', 'lWrist'] 
+        r_bone = ['rShoulder', 'rElbow', 'rWrist']
+        if bone_name in l_bone:
+            return R.from_euler('XYZ', [0.,0.,45.], degrees=True)
+        if bone_name in r_bone:
+            return R.from_euler('XYZ', [0.,0.,-45.], degrees=True)
+        return R.from_euler('XYZ', [0.,0.,0.], degrees=True)
+
+
+    motion_data = load_motion_data(A_pose_bvh_path)
+
+    t_name, t_parent, t_offset = part1_calculate_T_pose(T_pose_bvh_path)
+    a_name, a_parent, a_offset = part1_calculate_T_pose(A_pose_bvh_path)
+
+    end_bone_index_t = []
+    for i in range(len(t_name)):
+        if t_name[i].endswith('_end'):
+            end_bone_index_t.append(i)
+
+    end_bone_index_a = []
+    for i in range(len(a_name)):
+        if a_name[i].endswith('_end'):
+            end_bone_index_a.append(i)
+
+    for m_i in range(len(motion_data)):
+        frame = motion_data[m_i]
+        cur_frame = np.empty(frame.shape[0])
+        cur_frame[:3] = frame[:3]
+        for t_i in range(len(t_name)):
+            cur_bone = t_name[t_i]
+            a_i = a_name.index(t_name[t_i])
+            if cur_bone.endswith('_end'):
+                continue
+            channel_t_i = index_bone_to_channel(t_i, 't')
+            channel_a_i = index_bone_to_channel(a_i, 'a')
+            
+            # retarget
+            local_rotation = frame[3+channel_a_i*3 : 6+channel_a_i*3]
+            if cur_bone in ['lShoulder', 'lElbow', 'lWrist', 'rShoulder', 'rElbow', 'rWrist']:
+                p_bone_name = t_name[t_parent[t_i]]
+                Q_pi = get_t2a_offset(p_bone_name)
+                Q_i = get_t2a_offset(cur_bone)
+                local_rotation = (Q_pi * R.from_euler('XYZ', local_rotation, degrees=True) * Q_i.inv()).as_euler('XYZ', degrees=True)
+            cur_frame[3+channel_t_i*3 : 6+channel_t_i*3] = local_rotation
+
+        motion_data[m_i] = cur_frame
+
     return motion_data
 
 # test
 
-# import os.path as osp
+import os.path as osp
 # joint_name, joint_parent, joint_offset = part1_calculate_T_pose(osp.abspath(osp.dirname(__file__)) + "/data/walk60.bvh")
 # motion_data = load_motion_data(osp.abspath(osp.dirname(__file__)) + "/data/walk60.bvh")
 # joint_positions, joint_orientations = part2_forward_kinematics(joint_name, joint_parent, joint_offset, motion_data, 0)
+part3_retarget_func(osp.abspath(osp.dirname(__file__)) + "/data/walk60.bvh", osp.abspath(osp.dirname(__file__)) + "/data/A_pose_run.bvh")

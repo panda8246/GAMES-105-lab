@@ -7,3 +7,5 @@ dependencies = [
     "panda3d",
 ]
 version = "0.0.1"
+[tool.setuptools]
+py-modules = []
