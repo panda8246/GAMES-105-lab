@@ -19,6 +19,16 @@ def load_motion_data(bvh_file_path):
 
 
 def load_joint_data(bvh_file_path):
+    """
+    输入： bvh 文件路径
+    输出:
+        joint_name: List[str]，字符串列表，包含着所有关节的名字
+        joint_parent: List[int]，整数列表，包含着所有关节的父关节的索引,根节点的父关节索引为-1
+        joint_offset: np.ndarray，形状为(M, 3)的numpy数组，包含着所有关节的偏移量
+
+    Tips:
+        joint_name顺序应该和bvh一致
+    """
     joint_name = []
     joint_parent = []
     joint_offset = []
@@ -52,16 +62,6 @@ def load_joint_data(bvh_file_path):
 
 
 def part1_calculate_T_pose(bvh_file_path):
-    """请填写以下内容
-    输入： bvh 文件路径
-    输出:
-        joint_name: List[str]，字符串列表，包含着所有关节的名字
-        joint_parent: List[int]，整数列表，包含着所有关节的父关节的索引,根节点的父关节索引为-1
-        joint_offset: np.ndarray，形状为(M, 3)的numpy数组，包含着所有关节的偏移量
-
-    Tips:
-        joint_name顺序应该和bvh一致
-    """
     return load_joint_data(bvh_file_path)
 
 
@@ -77,9 +77,40 @@ def part2_forward_kinematics(joint_name, joint_parent, joint_offset, motion_data
         1. joint_orientations的四元数顺序为(x, y, z, w)
         2. from_euler时注意使用大写的XYZ
     """
-    joint_positions = None
-    joint_orientations = None
-    return joint_positions, joint_orientations
+    joint_positions = []
+    joint_orientations = []
+    frame_data = motion_data[frame_id]
+    channels_data = []
+    # 将数组成3个float一组的自由度
+    for i in range(0, len(frame_data), 3):
+        channels_data.append(np.array(frame_data[i:i+3]))
+    root_pos = channels_data[0]
+    root_ori = channels_data[1]
+    channels_data = channels_data[1:]
+    joint_positions.append(root_pos)
+    joint_orientations.append(R.from_euler('XYZ', root_ori, degrees=True).as_quat())
+    # 计算FK过程
+    ori_idx = 0
+    for i, parent in enumerate(joint_parent):
+        if parent == -1:
+            continue
+        # 末端节点没有自由度
+        if not joint_name[i].endswith("_end"):
+            ori_idx += 1
+        parent_pos = joint_positions[parent]
+        parent_ori = joint_orientations[parent]
+        parent_ori = R.from_quat(parent_ori)
+        # P = Pp + Qp * Oi
+        cur_pos = parent_pos + parent_ori.apply(joint_offset[i])
+        joint_positions.append(cur_pos)
+        if not joint_name[i].endswith("_end"):
+            # Q = Qp * Qi
+            cur_ori = (parent_ori * R.from_euler('XYZ', channels_data[ori_idx], degrees=True)).as_quat()
+        else:
+            # 末端节点沿用父节点的朝向
+            cur_ori = parent_ori.as_quat()
+        joint_orientations.append(cur_ori)
+    return np.array(joint_positions), np.array(joint_orientations)
 
 
 def part3_retarget_func(T_pose_bvh_path, A_pose_bvh_path):
@@ -98,4 +129,6 @@ def part3_retarget_func(T_pose_bvh_path, A_pose_bvh_path):
 # test
 
 # import os.path as osp
-# part1_calculate_T_pose(osp.abspath(osp.dirname(__file__)) + "/data/walk60.bvh")
+# joint_name, joint_parent, joint_offset = part1_calculate_T_pose(osp.abspath(osp.dirname(__file__)) + "/data/walk60.bvh")
+# motion_data = load_motion_data(osp.abspath(osp.dirname(__file__)) + "/data/walk60.bvh")
+# joint_positions, joint_orientations = part2_forward_kinematics(joint_name, joint_parent, joint_offset, motion_data, 0)
