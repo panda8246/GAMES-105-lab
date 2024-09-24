@@ -1,0 +1,9 @@
+
+[project]
+name = "Games_105"
+dependencies = [
+    "numpy",
+    "scipy",
+    "panda3d",
+]
+version = "0.0.1"
