@@ -1,6 +1,12 @@
 from task1_forward_kinematics import *
 from scipy.spatial.transform import Rotation as R
 from Lab2_IK_answers import *
+
+
+import debugpy
+debugpy.listen(7788)
+# debugpy.wait_for_client()
+
 class MetaData:
     def __init__(self, joint_name, joint_parent, joint_initial_position, root_joint, end_joint):
         """
@@ -168,8 +174,8 @@ def main():
     viewer = SimpleViewer()
     
     # part1
-    part1_simple(viewer, np.array([0.5, 0.75, 0.5]))
-    # part1_hard(viewer, np.array([0.5, 0.5, 0.5]))
+    # part1_simple(viewer, np.array([0.5, 0.75, 0.5]))
+    part1_hard(viewer, np.array([0.5, 0.5, 0.5]))
     # part1_animation(viewer, np.array([0.5, 0.5, 0.5]))
     
     # part2

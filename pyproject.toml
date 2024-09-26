@@ -5,6 +5,7 @@ dependencies = [
     "numpy",
     "scipy",
     "panda3d",
+    "debugpy",
 ]
 version = "0.0.1"
 [tool.setuptools]
