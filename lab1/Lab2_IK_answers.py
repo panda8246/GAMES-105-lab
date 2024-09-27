@@ -8,21 +8,32 @@ def distance(vec1, vec2):
 def ccd_ik(meta_data, joint_positions, joint_orientations, target_pose):
     """CCD算法求解IK"""
     path, path_name, end_to_root, fixed_to_root = meta_data.get_path_from_root_to_end()
+    
+    # 以path为chain，start为根节点
+    local_ori_list = []
+    chain_offset_list = []
+    for i, joint in enumerate(path):
+        if i == 0:
+            local_ori_list.append(R.from_quat(joint_orientations[joint]))
+            chain_offset_list.append(np.zeros(3))
+            continue
+        parent_ori = local_ori_list[i - 1]
+        local_ori_list.append(parent_ori.inv() * R.from_quat(joint_orientations[joint]))
+        chain_offset_list.append(joint_positions[joint] - joint_positions[path[i - 1]])
+
     # 本地joint局部坐标系的ori
-    local_ori_list = [R.from_quat(joint_orientations[0])] + [R.from_quat(joint_orientations[meta_data.joint_parent[i]]).inv() * R.from_quat(ori) for i, ori in enumerate(joint_orientations) if i != 0]
-    max_iterate_times = 5
+    max_iterate_times = 10
     min_deviation = 0.01
     link_start = path[0]   # 链式起点
     link_end = path[-1]    # 链式终点 也就是ik的端点
+    end_pos = joint_positions[link_end]
     while max_iterate_times > 0:
-        end_pos = joint_positions[link_end]
         if distance(end_pos, target_pose) <= min_deviation:
             break
         # 从end进行一次遍历
         for i in range(len(path)-1, -1, -1):
             joint = path[i]
-            end_pos = joint_positions[link_end]
-            if joint == link_end or joint == link_start:
+            if joint == link_end:
                 continue
             parent = meta_data.joint_parent[joint]
             joint_pos = joint_positions[joint]
@@ -34,32 +45,33 @@ def ccd_ik(meta_data, joint_positions, joint_orientations, target_pose):
             old_vec = (end_pos - joint_pos) / radius
             new_vec = (min_pos - joint_pos) / radius
             rotation = R.from_rotvec(np.cross(old_vec, new_vec), degrees=False)
-            # 计算旋转轴
-            # cross_prod = np.cross(old_vec, new_vec)
-            # # 计算旋转角度
-            # dot_prod = np.dot(old_vec, new_vec)
-            # angle = np.arccos(np.clip(dot_prod, -1.0, 1.0))
+            local_ori_list[i] = rotation * local_ori_list[i]
+            end_pos = min_pos
 
-            # # 若叉积的范数为0，说明A和B是平行或反平行的情况
-            # if np.linalg.norm(cross_prod) == 0:
-            #     rotation = R.from_euler('z', 0)  # 平行情况下不需要旋转
-            # else:
-            #     cross_prod_norm = cross_prod / np.linalg.norm(cross_prod)
-            #     # 创建旋转对象
-            #     rotation = R.from_rotvec(angle * cross_prod_norm, degrees=False)
-            if joint in end_to_root:
-                local_ori_list[joint] = rotation * local_ori_list[joint]
+        # 执行一次chain的FK
+        chain_ori_list = []
+        chain_pos_list = []
+        for j, joint in enumerate(path):
+            if j == 0:
+                chain_ori_list.append(local_ori_list[0])
+                chain_pos_list.append(joint_positions[joint])
             else:
-                local_ori_list[joint] = local_ori_list[joint] * rotation
-
-            for n in range(len(joint_orientations)):
-                parent = meta_data.joint_parent[n]
-                if parent == -1:
-                    parent = 0
-                parent_ori = R.from_quat(joint_orientations[parent])
-                joint_orientations[n] = (parent_ori * local_ori_list[n]).as_quat()
-                offset = meta_data.joint_initial_position[n] - meta_data.joint_initial_position[parent]
-                joint_positions[n] = joint_positions[parent] + parent_ori.apply(offset)
+                chain_ori_list.append(chain_ori_list[j - 1] * local_ori_list[j])
+                chain_pos_list.append(joint_positions[j - 1] + chain_ori_list[j - 1].apply(chain_offset_list[j]))
+        # 对真正的root应用chain FK之后的结果
+        root_idx = path.index(fixed_to_root[-1])
+        joint_positions[0] = chain_pos_list[root_idx]
+        joint_orientations[0] = chain_ori_list[root_idx].as_quat()
+        # 执行一次FK
+        for n in range(len(joint_orientations)):
+            parent = meta_data.joint_parent[n]
+            if parent == -1:
+                parent = 0
+            parent_ori = R.from_quat(joint_orientations[parent])
+            if n in path and n != link_start:
+                joint_orientations[n] = chain_ori_list[path.index(n)].as_quat()
+            offset = meta_data.joint_initial_position[n] - meta_data.joint_initial_position[parent]
+            joint_positions[n] = joint_positions[parent] + parent_ori.apply(offset)
             
         max_iterate_times -= 1
     return joint_positions, joint_orientations
