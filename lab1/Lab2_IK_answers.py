@@ -10,21 +10,31 @@ def ccd_ik(meta_data, joint_positions, joint_orientations, target_pose):
     path, path_name, end_to_root, fixed_to_root = meta_data.get_path_from_root_to_end()
     
     joint_init_local_ori = [R.from_euler('xyz', [0, 0, 0], degrees=True)] + [R.from_quat(joint_orientations[meta_data.joint_parent[joint]]).inv() * R.from_quat(ori) for joint,ori in enumerate(joint_orientations) if joint > 0]
+    parent_list = meta_data.joint_parent
+    joint_offset = [np.empty(3)] + [meta_data.joint_initial_position[joint] - meta_data.joint_initial_position[parent_list[joint]] for joint in range(1, len(joint_orientations))]
     # 以path为chain，start为根节点
     local_ori_list = []
-    update_loacal_ori_list = [R.from_euler('xyz', [0, 0, 0], degrees=True)] * len(path)
     chain_offset_list = []
+    chain_ori_list = []
     for i, joint in enumerate(path):
+        if joint in fixed_to_root:
+            chain_ori_list.append(R.from_quat(joint_orientations[path[i + 1]]))
+            chain_offset_list.append(-joint_offset[path[i - 1]])
+        else:
+            chain_offset_list.append(joint_offset[joint])
+            chain_ori_list.append(R.from_quat(joint_orientations[joint]))
         if i == 0:
-            local_ori_list.append(R.from_quat(joint_orientations[joint]))
-            chain_offset_list.append(np.zeros(3))
+            local_ori_list.append(R.from_euler('xyz', [0, 0, 0], degrees=True))
             continue
-        parent_ori = R.from_quat(joint_orientations[path[i-1]])
-        local_ori_list.append(parent_ori.inv() * R.from_quat(joint_orientations[joint]))
-        chain_offset_list.append(joint_positions[joint] - joint_positions[path[i - 1]])
+        parent_ori = R.from_quat(joint_orientations[parent_list[joint]])
+        if joint in fixed_to_root:
+            local_ori_list.append((parent_ori.inv() * R.from_quat(joint_orientations[joint])).inv())
+        else:
+            local_ori_list.append(parent_ori.inv() * R.from_quat(joint_orientations[joint]))
+
 
     # 本地joint局部坐标系的ori
-    max_iterate_times = 30
+    max_iterate_times = 1
     min_deviation = 0.01
     link_start = path[0]   # 链式起点
     link_end = path[-1]    # 链式终点 也就是ik的端点
@@ -35,7 +45,7 @@ def ccd_ik(meta_data, joint_positions, joint_orientations, target_pose):
         # 从end进行一次遍历
         for i in range(len(path)-1, -1, -1):
             joint = path[i]
-            if joint == link_end or joint == 0:
+            if joint == link_end:
                 continue
             joint_pos = joint_positions[joint]
             radius = distance(joint_pos, end_pos)
@@ -46,30 +56,34 @@ def ccd_ik(meta_data, joint_positions, joint_orientations, target_pose):
             old_vec = (end_pos - joint_pos) / radius
             new_vec = (min_pos - joint_pos) / radius
             rotation = R.from_rotvec(np.cross(old_vec, new_vec), degrees=False)
-            update_loacal_ori_list[i] = rotation * update_loacal_ori_list[i]
+            chain_ori_list[i] = rotation * chain_ori_list[i]
+            local_ori_list[i] = chain_ori_list[i - 1].inv() * chain_ori_list[i]
             end_pos = min_pos
 
         # 执行一次chain的FK
-        chain_ori_list = []
-        chain_pos_list = []
+        _chain_pos_list = []
         for j, joint in enumerate(path):
                 
             if j == 0:
-                chain_ori_list.append(local_ori_list[0])
-                chain_pos_list.append(joint_positions[joint])
+                _chain_pos_list.append(joint_positions[joint])
                 continue
-            chain_ori_list.append(chain_ori_list[j - 1] * update_loacal_ori_list[j] * local_ori_list[j])
-            chain_pos_list.append(chain_pos_list[j - 1] + chain_ori_list[j - 1].apply(chain_offset_list[j]))
-        for i in range(len(path)):
-            joint_positions[path[i]] = chain_pos_list[i]
-            joint_orientations[path[i]] = chain_ori_list[i].as_quat()
+            if joint in fixed_to_root:
+                chain_ori_list[j] = chain_ori_list[j - 1] * local_ori_list[j]
+            else:
+                chain_ori_list[j] = chain_ori_list[j - 1] * local_ori_list[j].inv()
+            _chain_pos_list.append(_chain_pos_list[j - 1] + chain_ori_list[j - 1].apply(chain_offset_list[j]))
+        root_idx = 0
+        joint_positions[root_idx] = _chain_pos_list[path.index(root_idx)]
+        joint_orientations[root_idx] = (chain_ori_list[path.index(root_idx)]).as_quat()
         # # 执行一次FK
         for n in range(1, len(joint_orientations)):
             parent = meta_data.joint_parent[n]
             parent_ori = R.from_quat(joint_orientations[parent])
             if n in path:
-             if n in fixed_to_root:
-                joint_orientations[n] = (parent_ori * update_loacal_ori_list[path.index(n)-1].inv() * joint_init_local_ori[n]).as_quat()
+                if n in fixed_to_root:
+                    joint_orientations[n] = (parent_ori * local_ori_list[path.index(n)].inv()).as_quat()
+                else:
+                    joint_orientations[n] = (parent_ori * local_ori_list[path.index(n)]).as_quat()
             else:
                 joint_orientations[n] = (parent_ori * joint_init_local_ori[n]).as_quat()
             offset = meta_data.joint_initial_position[n] - meta_data.joint_initial_position[parent]
@@ -81,8 +95,8 @@ def ccd_ik(meta_data, joint_positions, joint_orientations, target_pose):
 
 
 def ppp_ik(meta_data, joint_positions, joint_orientations, target_pose):
+    # 相对父节点的local ori
     def get_joint_rotations():
-        # 相对父节点的ori
         joint_rotations = np.empty(joint_orientations.shape)
         for i in range(len(joint_name)):
             if joint_parent[i] == -1:
@@ -91,8 +105,8 @@ def ppp_ik(meta_data, joint_positions, joint_orientations, target_pose):
                 joint_rotations[i] = (R.from_quat(joint_orientations[joint_parent[i]]).inv() * R.from_quat(joint_orientations[i])).as_quat()
         return joint_rotations
 
+    # 相对父节点的local pos
     def get_joint_offsets():
-        # 相对父节点的pos
         joint_offsets = np.empty(joint_positions.shape)
         for i in range(len(joint_name)):
             if joint_parent[i] == -1:
@@ -111,8 +125,8 @@ def ppp_ik(meta_data, joint_positions, joint_orientations, target_pose):
         path2 = []
 
     # 每个joint的local rotation，用四元数表示
-    joint_rotations = get_joint_rotations()
-    joint_offsets = get_joint_offsets()
+    joint_rotations = get_joint_rotations()     # 相对父节点的local ori
+    joint_offsets = get_joint_offsets()         # 相对父节点的local pos
 
 
     # chain和path中的joint相对应，chain[0]代表不动点，chain[-1]代表end节点
